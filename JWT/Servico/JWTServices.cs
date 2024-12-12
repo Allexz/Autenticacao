@@ -3,7 +3,6 @@ using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace JWT.Servico;
@@ -17,63 +16,69 @@ public class JWTServices : IJWTServices
         _configuration = configuration;
         _redis = redis.GetDatabase();
     }
-    private string BuildToken(LoginRequest login)
+
+    public async Task<TokenResponse> GetToken(LoginRequest login)
+    {
+        TokenResponse result = new TokenResponse
+        {
+            AccessToken = await BuildToken(login, "new"),
+            RefreshToken = Guid.NewGuid().ToString() //await BuildToken(login, "refresh")
+        };
+        await RevokeRefreshTokenAsync(login.Username);
+        await SaveRefreshTokenAsync(login, result.RefreshToken);
+        return result;
+    }
+    public async Task<string?> GetRefreshToken(RefreshTokenRequest refreshReq)
+    {
+        string? tokenRecuperado = await _redis.StringGetAsync($"Token:{refreshReq.UserId }");
+        if (string.IsNullOrWhiteSpace(tokenRecuperado))
+        {
+            throw new SecurityTokenArgumentException();
+        }
+        return tokenRecuperado;
+    }
+
+    private async Task<string> BuildToken(LoginRequest login, string @type)
+    {
+        JwtSecurityToken token = await GenerateToken(login, @type);
+        string result = new JwtSecurityTokenHandler().WriteToken(token);//TOKEN serializado
+        return result;
+    }
+    private async Task<JwtSecurityToken> GenerateToken(LoginRequest login, string @type)
     {
         Claim[] claims = new[]
         {
-            //Representa o SUBJECT do token, geralmente adota-se o nome do usuario.
-            new Claim(JwtRegisteredClaimNames.Sub, login.Username),
-            //Identificador unico para o TOKEN gerado
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new Claim(JwtRegisteredClaimNames.Sub, login.Username),//Representa o SUBJECT do token, geralmente adota-se o nome do usuario.
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())//Identificador unico para o TOKEN gerado
         };
 
-        //Chave para assinar o TOKEN, e recuperada da configuracao e convertida em bytes para uso na criptografia simetrica
-        SymmetricSecurityKey? key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:SecretKey"]!));
-        //Define as credenciais da assinatura, neste caso o algoritmo HMAC-SHA256 para proteger o TOKEN
-        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        SymmetricSecurityKey key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:SecretKey"]!));//Chave para assinar o TOKEN
+        SigningCredentials creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);//Define as credenciais da assinatura
 
-        JwtSecurityToken token = new JwtSecurityToken(
-            //Emissor
-            issuer: _configuration["Jwt:Issuer"],
-            //Quem pode utilizar o TOKEN
-            audience: _configuration["Jwt:Audience"],
-            //Dados que estao sendo incluidos no TOKEN
-            claims: claims,
-            //Data de expiracao a partir da criacao do TOKEN
-            expires: DateTime.UtcNow.AddMinutes(30),
-            //Credenciais utilizadas para assinar o TOKEN
-            signingCredentials: creds);
-        //TOKEN e serializado para retornar em forma de STRING para o cliente
-        string result = new JwtSecurityTokenHandler().WriteToken(token);
-        return result;
-    }
-
-    private string GenerateRefreshToken()
-    {
-        var randomNumber = new byte[32];
-        using (var rng = RandomNumberGenerator.Create())
+        DateTime expireTime = @type switch
         {
-            rng.GetBytes(randomNumber);
-            return Convert.ToBase64String(randomNumber);
-        }
-    }
+            "refresh" => DateTime.UtcNow.AddDays(7),
+            "new" => DateTime.UtcNow.AddMinutes(5),
+            _ => throw new ArgumentException("Invalid token type", nameof(type))
+        };
 
-    public (string, string) GetToken(LoginRequest login)
+        return new JwtSecurityToken(issuer: _configuration["Jwt:Issuer"],//Emissor
+                                        audience: _configuration["Jwt:Audience"],//Quem pode utilizar o TOKEN
+                                        claims: @type == "new" 
+                                            ? claims
+                                            : null ,//Dados que estao sendo incluidos no TOKEN
+                                        expires: expireTime,//Data de expiracao a partir da criacao do TOKEN
+                                        signingCredentials: creds//Credenciais utilizadas para assinar o TOKEN
+                                      );
+    }
+    private Task SaveRefreshTokenAsync(LoginRequest login, string token)
     {
-        (string,string) result = (BuildToken(login), GenerateRefreshToken());
-        SaveRefreshToken(login, result.Item2);
-        return result;
+        _redis.StringSet($"Token:{login.Username}", token);
+        return Task.CompletedTask;
     }
-
-    private void SaveRefreshToken(LoginRequest login, string token)
+    private async Task RevokeRefreshTokenAsync(string username)
     {
-        _redis.StringAppend($"Token:{login.Username}", token);
+        await _redis.KeyDeleteAsync(username);
     }
-
-    private void GetRefreshToken(LoginRequest login, string token)
-    {
-        string? refreshToken = _redis.StringGet($"Token:{login.Username}");
-    }
-
 
 }

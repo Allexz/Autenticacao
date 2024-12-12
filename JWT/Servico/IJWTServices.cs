@@ -4,5 +4,6 @@ namespace JWT.Servico;
 
 public interface IJWTServices
 {
-    (string,string) GetToken(LoginRequest login);
+    Task<TokenResponse> GetToken(LoginRequest login);
+    Task<string?> GetRefreshToken(RefreshTokenRequest refreshReq);
 }

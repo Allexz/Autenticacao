@@ -1,14 +1,8 @@
-﻿using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity.Data;
+﻿using JWT.Models;
+using JWT.Servico;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using JWT.Models;
-using JWT.Servico;
 using System.Collections.Concurrent;
-using StackExchange.Redis;
 
 namespace JWT.Controllers;
 [Route("api/[controller]")]
@@ -30,18 +24,47 @@ public class AutenticarController : ControllerBase
     }
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] Models.LoginRequest login)
+    public async Task<IActionResult> Login([FromBody] Models.LoginRequest login)
     {
         // Validação estática para simplificação (substitua por autenticação real)
-        if (login.Username != "usuario" || login.Password != "senha")
+        try
         {
-            return Unauthorized("Usuário ou senha inválidos");
+            if (login.Username != "string" || login.Password != "string")
+            {
+                return Unauthorized("Usuário ou senha inválidos");
+            }
+
+            TokenResponse response = await _jWTServices.GetToken(login);
+
+            return Ok(response);
         }
+        catch (SecurityTokenExpiredException)
+        {
+            return Unauthorized("Token expirado");
+        }
+        catch (SecurityTokenException)
+        {
+            return Unauthorized("Token inválido");
+        }
+    }
 
-        (string, string) token = _jWTServices.GetToken(login);
+    [HttpPost("refreshtoken")]
+    public async Task<IActionResult> GetRefreshToken([FromBody] Models.RefreshTokenRequest refreshTokenRequest)
+    {
+        try
+        {
+            string? response = await _jWTServices.GetRefreshToken(refreshTokenRequest);
 
-
-        return Ok(token);
+            return Ok(response);
+        }
+        catch (SecurityTokenExpiredException)
+        {
+            return Unauthorized("Token expirado");
+        }
+        catch (SecurityTokenException)
+        {
+            return Unauthorized("Token inválido");
+        }
     }
 }
 
