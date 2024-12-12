@@ -55,11 +55,11 @@ public class AutenticarController : ControllerBase
         {
             string? response = await _jWTServices.GetRefreshToken(refreshTokenRequest);
 
-            return Ok(response);
+            return Ok("Refresh Token válido");
         }
         catch (SecurityTokenExpiredException)
         {
-            return Unauthorized("Token expirado");
+            return Unauthorized("Erro na obtenção do Token");
         }
         catch (SecurityTokenException)
         {
